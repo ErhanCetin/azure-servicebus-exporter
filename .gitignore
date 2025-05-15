@@ -21,3 +21,4 @@ config.local.yaml
 
 # Dependency directories
 node_modules/
+azure-servicebus-exporter
