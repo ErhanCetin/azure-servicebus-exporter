@@ -100,6 +100,36 @@ func (m *ServiceBusMetrics) initMetricDefinitions() {
 	// Message size metrics
 	m.registerMetric("message_size_bytes", "Size of messages in bytes",
 		[]string{"namespace", "entity_name", "entity_type", "direction"})
+	// İşlem sırasındaki mesaj sayıları
+	m.registerMetric("processing_messages", "Number of messages being processed",
+		[]string{"namespace", "entity_name", "entity_type"})
+
+	// Mesaj yaşı (en eski mesajın yaşı)
+	m.registerMetric("oldest_message_age_seconds", "Age of the oldest message in the entity in seconds",
+		[]string{"namespace", "entity_name", "entity_type"})
+
+	// Transit mesajlar
+	m.registerMetric("transfer_dlq_messages", "Number of messages in the transfer dead-letter queue",
+		[]string{"namespace", "entity_name", "entity_type"})
+
+	// Mesaj hızı metrikleri
+	m.registerMetric("message_throughput_per_second", "Messages processed per second",
+		[]string{"namespace", "entity_name", "entity_type", "direction"})
+
+	// Mesaj işleme gecikmesi
+	m.registerMetric("message_processing_latency_ms", "Message processing latency in milliseconds",
+		[]string{"namespace", "entity_name", "entity_type", "percentile"})
+
+	// Bağlantı durumu metrikleri
+	m.registerMetric("connection_failures", "Number of connection failures",
+		[]string{"namespace", "entity_name", "entity_type", "reason"})
+
+	// Premium katman özellikleri
+	m.registerMetric("cpu_usage_percent", "CPU usage percentage in Premium tier",
+		[]string{"namespace", "entity_name", "entity_type"})
+
+	m.registerMetric("memory_usage_percent", "Memory usage percentage in Premium tier",
+		[]string{"namespace", "entity_name", "entity_type"})
 }
 
 // registerMetric registers a new metric definition

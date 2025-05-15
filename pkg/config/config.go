@@ -43,28 +43,24 @@ type Config struct {
 
 	// Metrics yapılandırması
 	Metrics struct {
-		Namespace      string        `mapstructure:"namespace"`
-		Template       string        `mapstructure:"template"`
-		CacheDuration  time.Duration `mapstructure:"cache_duration"`
-		ScrapeInterval time.Duration `mapstructure:"scrape_interval"`
+		Namespace        string            `mapstructure:"namespace"`
+		Template         string            `mapstructure:"template"`
+		CacheDuration    time.Duration     `mapstructure:"cache_duration"`
+		ScrapeInterval   time.Duration     `mapstructure:"scrape_interval"`
+		CustomLabels     map[string]string `mapstructure:"custom_labels"`     // Tüm metriklere eklenecek özel etiketler
+		EntityFormat     string            `mapstructure:"entity_format"`     // Entity adı formatı (örn: {namespace}.{name})
+		IncludeOperation bool              `mapstructure:"include_operation"` // İşlem adlarını etiket olarak ekle
 	} `mapstructure:"metrics"`
 
 	// ServiceBus yapılandırması
 	ServiceBus struct {
-		Namespaces       []string `mapstructure:"namespaces"`        // Connection string modunda kullanılmaz
-        ResourceGroup    string   `mapstructure:"resource_group"`   
-        UseRealEntities  bool     `mapstructure:"use_real_entities"` 
+		Namespaces       []string `mapstructure:"namespaces"` // Connection string modunda kullanılmaz
+		ResourceGroup    string   `mapstructure:"resource_group"`
+		UseRealEntities  bool     `mapstructure:"use_real_entities"`
 		EntityFilter     string   `mapstructure:"entity_filter"`     // Entity filtreleme (regex)
 		EntityTypes      []string `mapstructure:"entity_types"`      // "queue", "topic", "subscription"
 		IncludeNamespace bool     `mapstructure:"include_namespace"` // Namespace metriklerini dahil et
 	} `mapstructure:"servicebus"`
-
-	// Kubernetes yapılandırması
-	Kubernetes struct {
-		SecretName      string `mapstructure:"secret_name"`
-		SecretNamespace string `mapstructure:"secret_namespace"`
-		SecretKey       string `mapstructure:"secret_key"`
-	} `mapstructure:"kubernetes"`
 
 	// Log yapılandırması
 	Logging struct {
@@ -139,12 +135,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("metrics.scrapeInterval", "1m")
 
 	// ServiceBus defaults
-    v.SetDefault("servicebus.resource_group", "")
-    v.SetDefault("servicebus.use_real_entities", false)
-    v.SetDefault("servicebus.entity_filter", ".*")
-    v.SetDefault("servicebus.entity_types", []string{"queue", "topic", "subscription"})
-    v.SetDefault("servicebus.include_namespace", true)
-    
+	v.SetDefault("servicebus.resource_group", "")
+	v.SetDefault("servicebus.use_real_entities", false)
+	v.SetDefault("servicebus.entity_filter", ".*")
+	v.SetDefault("servicebus.entity_types", []string{"queue", "topic", "subscription"})
+	v.SetDefault("servicebus.include_namespace", true)
+
 	// Logging defaults
 	v.SetDefault("logging.level", "info")
 	v.SetDefault("logging.format", "text")
@@ -154,8 +150,8 @@ func setDefaults(v *viper.Viper) {
 func validateConfig(config *Config) error {
 	// Validate auth configuration
 	if config.Auth.Mode == "connection_string" {
-		if config.Auth.ConnectionString == "" && config.Kubernetes.SecretName == "" {
-			return errors.New("connection_string or kubernetes.secretName must be provided when auth.mode is 'connection_string'")
+		if config.Auth.ConnectionString == "" {
+			return errors.New("connection_string must be provided when auth.mode is 'connection_string'")
 		}
 	} else if config.Auth.Mode == "azure_auth" {
 		if !config.Auth.UseManagedIdentity {

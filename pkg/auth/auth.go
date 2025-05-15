@@ -4,10 +4,12 @@ import (
     "context"
     "errors"
     "fmt"
+    "os"
     
     "github.com/Azure/azure-sdk-for-go/sdk/azcore"
     "github.com/Azure/azure-sdk-for-go/sdk/azidentity"
     "github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus"
+    "github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus/admin"
     "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/monitor/armmonitor"
     "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/servicebus/armservicebus"
     "azure-servicebus-exporter/pkg/config"
@@ -17,6 +19,9 @@ import (
 type AuthProvider interface {
     // GetServiceBusClient returns a Service Bus client
     GetServiceBusClient(ctx context.Context) (*azservicebus.Client, error)
+    
+    // GetServiceBusAdminClient returns a Service Bus admin client
+    GetServiceBusAdminClient(ctx context.Context) (*admin.Client, error)
     
     // GetMonitorClient returns an Azure Monitor client
     GetMonitorClient(ctx context.Context) (*armmonitor.MetricsClient, error)
@@ -58,7 +63,7 @@ func NewAuthProvider(cfg *config.Config) (AuthProvider, error) {
         namespace = cfg.ServiceBus.Namespaces[0]
     }
     
-    // Connection String kimlik doğrulama
+    // Connection String auth
     if cfg.Auth.Mode == "connection_string" {
         if cfg.Auth.ConnectionString != "" {
             return &ConnectionStringAuthProvider{
@@ -67,22 +72,53 @@ func NewAuthProvider(cfg *config.Config) (AuthProvider, error) {
             }, nil
         }
         
-        // Config'den connection string bulunamadı
-        return nil, errors.New("connection string not found in configuration")
+        // Environment variable fallback
+        envConnStr := os.Getenv("SB_CONNECTION_STRING")
+        if envConnStr != "" {
+            return &ConnectionStringAuthProvider{
+                connectionString: envConnStr,
+                namespace:        namespace,
+            }, nil
+        }
+        
+        return nil, errors.New("connection string not found in configuration or environment variables")
     }
     
-    // Azure kimlik bilgileri ile kimlik doğrulama
+    // Azure auth
     if cfg.Auth.Mode == "azure_auth" {
-        // En az bir subscription ID gerekiyor
+        // At least one subscription ID required
         if len(cfg.AzureMonitor.SubscriptionIDs) == 0 {
             return nil, errors.New("at least one subscription ID is required")
         }
         
+        // Get credentials from environment variables if not in config
+        tenantID := cfg.Auth.TenantID
+        if tenantID == "" {
+            tenantID = os.Getenv("AZURE_TENANT_ID")
+        }
+        
+        clientID := cfg.Auth.ClientID
+        if clientID == "" {
+            clientID = os.Getenv("AZURE_CLIENT_ID")
+        }
+        
+        clientSecret := cfg.Auth.ClientSecret
+        if clientSecret == "" {
+            clientSecret = os.Getenv("AZURE_CLIENT_SECRET")
+        }
+        
+        useManagedIdentity := cfg.Auth.UseManagedIdentity
+        
+        // Validate credentials
+        if !useManagedIdentity && (tenantID == "" || clientID == "" || clientSecret == "") {
+            return nil, errors.New("tenant_id, client_id, and client_secret must be provided when using service principal")
+        }
+        
         return &AzureAuthProvider{
-            tenantID:       cfg.Auth.TenantID,
-            clientID:       cfg.Auth.ClientID,
-            clientSecret:   cfg.Auth.ClientSecret,
-            useManaged:     cfg.Auth.UseManagedIdentity,
+            tenantID:       tenantID,
+            clientID:       clientID,
+            clientSecret:   clientSecret,
+            useManaged:     useManagedIdentity,
             subscriptionID: cfg.AzureMonitor.SubscriptionIDs[0],
             namespace:      namespace,
         }, nil
@@ -91,9 +127,9 @@ func NewAuthProvider(cfg *config.Config) (AuthProvider, error) {
     return nil, errors.New("invalid auth mode or missing credentials")
 }
 
-// Implement AuthProvider for ConnectionStringAuthProvider
+// Connection String Auth Provider implementations
+
 func (p *ConnectionStringAuthProvider) GetServiceBusClient(ctx context.Context) (*azservicebus.Client, error) {
-    // Connection string ile Service Bus client'ı oluştur
     client, err := azservicebus.NewClientFromConnectionString(p.connectionString, nil)
     if err != nil {
         return nil, fmt.Errorf("failed to create Service Bus client: %w", err)
@@ -101,81 +137,83 @@ func (p *ConnectionStringAuthProvider) GetServiceBusClient(ctx context.Context) 
     return client, nil
 }
 
+func (p *ConnectionStringAuthProvider) GetServiceBusAdminClient(ctx context.Context) (*admin.Client, error) {
+    client, err := admin.NewClientFromConnectionString(p.connectionString, nil)
+    if err != nil {
+        return nil, fmt.Errorf("failed to create Service Bus admin client: %w", err)
+    }
+    return client, nil
+}
+
 func (p *ConnectionStringAuthProvider) GetMonitorClient(ctx context.Context) (*armmonitor.MetricsClient, error) {
-    // Connection string ile Monitor API'ye erişilemez
     return nil, errors.New("cannot use Azure Monitor API with connection string auth")
 }
 
 func (p *ConnectionStringAuthProvider) GetServiceBusManagementClient(ctx context.Context) (*armservicebus.NamespacesClient, error) {
-    // Connection string ile Management API'ye erişilemez
     return nil, errors.New("cannot use Service Bus Management API with connection string auth")
 }
 
 func (p *ConnectionStringAuthProvider) GetQueuesClient(ctx context.Context) (*armservicebus.QueuesClient, error) {
-    // Connection string ile Queues Management API'ye erişilemez
     return nil, errors.New("cannot use Queues Management API with connection string auth")
 }
 
 func (p *ConnectionStringAuthProvider) GetTopicsClient(ctx context.Context) (*armservicebus.TopicsClient, error) {
-    // Connection string ile Topics Management API'ye erişilemez
     return nil, errors.New("cannot use Topics Management API with connection string auth")
 }
 
 func (p *ConnectionStringAuthProvider) GetSubscriptionsClient(ctx context.Context) (*armservicebus.SubscriptionsClient, error) {
-    // Connection string ile Subscriptions Management API'ye erişilemez
     return nil, errors.New("cannot use Subscriptions Management API with connection string auth")
 }
 
-// Implement AuthProvider for AzureAuthProvider
-func (p *AzureAuthProvider) GetServiceBusClient(ctx context.Context) (*azservicebus.Client, error) {
-    var cred azcore.TokenCredential
-    var err error
-    
+// Azure Auth Provider implementations
+
+func (p *AzureAuthProvider) getCredential() (azcore.TokenCredential, error) {
     if p.useManaged {
-        // Managed Identity kullan
-        cred, err = azidentity.NewDefaultAzureCredential(nil)
-        if err != nil {
-            return nil, fmt.Errorf("failed to create managed identity credential: %w", err)
-        }
+        // Use managed identity
+        return azidentity.NewDefaultAzureCredential(nil)
     } else {
-        // Service Principal kullan
+        // Use service principal
         options := &azidentity.ClientSecretCredentialOptions{}
-        cred, err = azidentity.NewClientSecretCredential(p.tenantID, p.clientID, p.clientSecret, options)
-        if err != nil {
-            return nil, fmt.Errorf("failed to create service principal credential: %w", err)
-        }
+        return azidentity.NewClientSecretCredential(p.tenantID, p.clientID, p.clientSecret, options)
+    }
+}
+
+func (p *AzureAuthProvider) GetServiceBusClient(ctx context.Context) (*azservicebus.Client, error) {
+    cred, err := p.getCredential()
+    if err != nil {
+        return nil, fmt.Errorf("failed to create credential: %w", err)
     }
     
-    // Namespace ve credential ile client oluştur
     fullyQualifiedNamespace := fmt.Sprintf("%s.servicebus.windows.net", p.namespace)
     client, err := azservicebus.NewClient(fullyQualifiedNamespace, cred, nil)
     if err != nil {
-        return nil, fmt.Errorf("failed to create service bus client: %w", err)
+        return nil, fmt.Errorf("failed to create Service Bus client: %w", err)
+    }
+    
+    return client, nil
+}
+
+func (p *AzureAuthProvider) GetServiceBusAdminClient(ctx context.Context) (*admin.Client, error) {
+    cred, err := p.getCredential()
+    if err != nil {
+        return nil, fmt.Errorf("failed to create credential: %w", err)
+    }
+    
+    fullyQualifiedNamespace := fmt.Sprintf("%s.servicebus.windows.net", p.namespace)
+    client, err := admin.NewClient(fullyQualifiedNamespace, cred, nil)
+    if err != nil {
+        return nil, fmt.Errorf("failed to create Service Bus admin client: %w", err)
     }
     
     return client, nil
 }
 
 func (p *AzureAuthProvider) GetMonitorClient(ctx context.Context) (*armmonitor.MetricsClient, error) {
-    var cred azcore.TokenCredential
-    var err error
-    
-    if p.useManaged {
-        // Managed Identity kullan
-        cred, err = azidentity.NewDefaultAzureCredential(nil)
-        if err != nil {
-            return nil, fmt.Errorf("failed to create managed identity credential: %w", err)
-        }
-    } else {
-        // Service Principal kullan
-        options := &azidentity.ClientSecretCredentialOptions{}
-        cred, err = azidentity.NewClientSecretCredential(p.tenantID, p.clientID, p.clientSecret, options)
-        if err != nil {
-            return nil, fmt.Errorf("failed to create service principal credential: %w", err)
-        }
+    cred, err := p.getCredential()
+    if err != nil {
+        return nil, fmt.Errorf("failed to create credential: %w", err)
     }
     
-    // ARM Monitor client oluştur
     client, err := armmonitor.NewMetricsClient(p.subscriptionID, cred, nil)
     if err != nil {
         return nil, fmt.Errorf("failed to create metrics client: %w", err)
@@ -185,112 +223,56 @@ func (p *AzureAuthProvider) GetMonitorClient(ctx context.Context) (*armmonitor.M
 }
 
 func (p *AzureAuthProvider) GetServiceBusManagementClient(ctx context.Context) (*armservicebus.NamespacesClient, error) {
-    var cred azcore.TokenCredential
-    var err error
-    
-    if p.useManaged {
-        // Managed Identity kullan
-        cred, err = azidentity.NewDefaultAzureCredential(nil)
-        if err != nil {
-            return nil, fmt.Errorf("failed to create managed identity credential: %w", err)
-        }
-    } else {
-        // Service Principal kullan
-        options := &azidentity.ClientSecretCredentialOptions{}
-        cred, err = azidentity.NewClientSecretCredential(p.tenantID, p.clientID, p.clientSecret, options)
-        if err != nil {
-            return nil, fmt.Errorf("failed to create service principal credential: %w", err)
-        }
+    cred, err := p.getCredential()
+    if err != nil {
+        return nil, fmt.Errorf("failed to create credential: %w", err)
     }
     
-    // Service Bus Management client oluştur
     client, err := armservicebus.NewNamespacesClient(p.subscriptionID, cred, nil)
     if err != nil {
-        return nil, fmt.Errorf("failed to create service bus namespaces client: %w", err)
+        return nil, fmt.Errorf("failed to create Service Bus management client: %w", err)
     }
     
     return client, nil
 }
 
 func (p *AzureAuthProvider) GetQueuesClient(ctx context.Context) (*armservicebus.QueuesClient, error) {
-    var cred azcore.TokenCredential
-    var err error
-    
-    if p.useManaged {
-        // Managed Identity kullan
-        cred, err = azidentity.NewDefaultAzureCredential(nil)
-        if err != nil {
-            return nil, fmt.Errorf("failed to create managed identity credential: %w", err)
-        }
-    } else {
-        // Service Principal kullan
-        options := &azidentity.ClientSecretCredentialOptions{}
-        cred, err = azidentity.NewClientSecretCredential(p.tenantID, p.clientID, p.clientSecret, options)
-        if err != nil {
-            return nil, fmt.Errorf("failed to create service principal credential: %w", err)
-        }
+    cred, err := p.getCredential()
+    if err != nil {
+        return nil, fmt.Errorf("failed to create credential: %w", err)
     }
     
-    // Service Bus Queues client oluştur
     client, err := armservicebus.NewQueuesClient(p.subscriptionID, cred, nil)
     if err != nil {
-        return nil, fmt.Errorf("failed to create service bus queues client: %w", err)
+        return nil, fmt.Errorf("failed to create queues client: %w", err)
     }
     
     return client, nil
 }
 
 func (p *AzureAuthProvider) GetTopicsClient(ctx context.Context) (*armservicebus.TopicsClient, error) {
-    var cred azcore.TokenCredential
-    var err error
-    
-    if p.useManaged {
-        // Managed Identity kullan
-        cred, err = azidentity.NewDefaultAzureCredential(nil)
-        if err != nil {
-            return nil, fmt.Errorf("failed to create managed identity credential: %w", err)
-        }
-    } else {
-        // Service Principal kullan
-        options := &azidentity.ClientSecretCredentialOptions{}
-        cred, err = azidentity.NewClientSecretCredential(p.tenantID, p.clientID, p.clientSecret, options)
-        if err != nil {
-            return nil, fmt.Errorf("failed to create service principal credential: %w", err)
-        }
+    cred, err := p.getCredential()
+    if err != nil {
+        return nil, fmt.Errorf("failed to create credential: %w", err)
     }
     
-    // Service Bus Topics client oluştur
     client, err := armservicebus.NewTopicsClient(p.subscriptionID, cred, nil)
     if err != nil {
-        return nil, fmt.Errorf("failed to create service bus topics client: %w", err)
+        return nil, fmt.Errorf("failed to create topics client: %w", err)
     }
     
     return client, nil
 }
 
 func (p *AzureAuthProvider) GetSubscriptionsClient(ctx context.Context) (*armservicebus.SubscriptionsClient, error) {
-    var cred azcore.TokenCredential
-    var err error
-    
-    if p.useManaged {
-        // Managed Identity kullan
-        cred, err = azidentity.NewDefaultAzureCredential(nil)
-        if err != nil {
-            return nil, fmt.Errorf("failed to create managed identity credential: %w", err)
-        }
-    } else {
-        // Service Principal kullan
-        options := &azidentity.ClientSecretCredentialOptions{}
-        cred, err = azidentity.NewClientSecretCredential(p.tenantID, p.clientID, p.clientSecret, options)
-        if err != nil {
-            return nil, fmt.Errorf("failed to create service principal credential: %w", err)
-        }
+    cred, err := p.getCredential()
+    if err != nil {
+        return nil, fmt.Errorf("failed to create credential: %w", err)
     }
     
-    // Service Bus Subscriptions client oluştur
     client, err := armservicebus.NewSubscriptionsClient(p.subscriptionID, cred, nil)
     if err != nil {
-        return nil, fmt.Errorf("failed to create service bus subscriptions client: %w", err)
+        return nil, fmt.Errorf("failed to create subscriptions client: %w", err)
     }
     
     return client, nil

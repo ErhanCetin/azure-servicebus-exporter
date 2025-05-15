@@ -3,6 +3,7 @@ package azuremonitor
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -73,7 +74,7 @@ func NewClient(cfg *config.Config, authProvider auth.AuthProvider, log *logrus.L
 		cfg:              cfg,
 		auth:             authProvider,
 		log:              log,
-		namespace:        namespace, // Bu satır eklenmeli
+		namespace:        namespace,
 		metrics:          make(map[string]*prometheus.GaugeVec),
 		cache:            make(map[string]metrics.MetricValue),
 		namespaceMetrics: []NamespaceMetric{},
@@ -150,12 +151,168 @@ func (c *Client) collectServiceBusMetrics(ctx context.Context, subscriptionID st
 		}
 
 		// Collect entity-level metrics (queues, topics, subscriptions)
-		for _, entityType := range c.cfg.ServiceBus.EntityTypes {
-			if err := c.collectEntityMetrics(ctx, resourceID, namespace, entityType); err != nil {
-				c.log.WithError(err).WithFields(logrus.Fields{
-					"namespace":   namespace,
-					"entity_type": entityType,
-				}).Error("Failed to collect entity metrics")
+		if c.cfg.ServiceBus.UseRealEntities {
+			// Get queues
+			queuesClient, err := c.auth.GetQueuesClient(ctx)
+			if err != nil {
+				c.log.WithError(err).Error("Failed to get queues client")
+			} else {
+				// Get list of queues
+				pager := queuesClient.NewListByNamespacePager(c.cfg.ServiceBus.ResourceGroup, namespace, nil)
+				for pager.More() {
+					page, err := pager.NextPage(ctx)
+					if err != nil {
+						c.log.WithError(err).Error("Failed to get queues page")
+						break
+					}
+
+					for _, queue := range page.Value {
+						if queue.Name != nil {
+							// Apply entity filter
+							if c.cfg.ServiceBus.EntityFilter != "" {
+								matched, _ := regexp.MatchString(c.cfg.ServiceBus.EntityFilter, *queue.Name)
+								if !matched {
+									continue
+								}
+							}
+
+							// Collect queue metrics
+							if err := c.collectEntityMetrics(ctx, resourceID, namespace, "queue", *queue.Name); err != nil {
+								c.log.WithError(err).WithFields(logrus.Fields{
+									"namespace":   namespace,
+									"entity_type": "queue",
+									"entity_name": *queue.Name,
+								}).Error("Failed to collect entity metrics")
+							}
+						}
+					}
+				}
+			}
+
+			// Get topics
+			topicsClient, err := c.auth.GetTopicsClient(ctx)
+			if err != nil {
+				c.log.WithError(err).Error("Failed to get topics client")
+			} else {
+				// Get list of topics
+				pager := topicsClient.NewListByNamespacePager(c.cfg.ServiceBus.ResourceGroup, namespace, nil)
+				for pager.More() {
+					page, err := pager.NextPage(ctx)
+					if err != nil {
+						c.log.WithError(err).Error("Failed to get topics page")
+						break
+					}
+
+					for _, topic := range page.Value {
+						if topic.Name != nil {
+							// Apply entity filter
+							if c.cfg.ServiceBus.EntityFilter != "" {
+								matched, _ := regexp.MatchString(c.cfg.ServiceBus.EntityFilter, *topic.Name)
+								if !matched {
+									continue
+								}
+							}
+
+							// Collect topic metrics
+							if err := c.collectEntityMetrics(ctx, resourceID, namespace, "topic", *topic.Name); err != nil {
+								c.log.WithError(err).WithFields(logrus.Fields{
+									"namespace":   namespace,
+									"entity_type": "topic",
+									"entity_name": *topic.Name,
+								}).Error("Failed to collect entity metrics")
+							}
+
+							// Get subscriptions for this topic
+							subscriptionsClient, err := c.auth.GetSubscriptionsClient(ctx)
+							if err != nil {
+								c.log.WithError(err).Error("Failed to get subscriptions client")
+								continue
+							}
+
+							// Get list of subscriptions
+							subPager := subscriptionsClient.NewListByTopicPager(c.cfg.ServiceBus.ResourceGroup, namespace, *topic.Name, nil)
+							for subPager.More() {
+								subPage, err := subPager.NextPage(ctx)
+								if err != nil {
+									c.log.WithError(err).Error("Failed to get subscriptions page")
+									break
+								}
+
+								for _, sub := range subPage.Value {
+									if sub.Name != nil {
+										// Apply entity filter
+										entityFullName := fmt.Sprintf("%s/%s", *topic.Name, *sub.Name)
+										if c.cfg.ServiceBus.EntityFilter != "" {
+											matched, _ := regexp.MatchString(c.cfg.ServiceBus.EntityFilter, entityFullName)
+											if !matched {
+												continue
+											}
+										}
+
+										// Collect subscription metrics
+										if err := c.collectEntityMetrics(ctx, resourceID, namespace, "subscription", fmt.Sprintf("%s/subscriptions/%s", *topic.Name, *sub.Name)); err != nil {
+											c.log.WithError(err).WithFields(logrus.Fields{
+												"namespace":   namespace,
+												"entity_type": "subscription",
+												"entity_name": entityFullName,
+											}).Error("Failed to collect entity metrics")
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		} else {
+			// Use test entities
+			testEntities := map[string][]string{
+				"queue": {"queue1", "queue2", "queue3"},
+				"topic": {"topic1", "topic2"},
+			}
+
+			// For test subscriptions, we need format topic/subscription
+			testSubscriptions := map[string][]string{
+				"topic1": {"subscription1", "subscription2"},
+				"topic2": {"subscription1"},
+			}
+
+			// Collect metrics for test entities
+			for _, entityType := range c.cfg.ServiceBus.EntityTypes {
+				if entityType == "queue" {
+					for _, entityName := range testEntities["queue"] {
+						if err := c.collectEntityMetrics(ctx, resourceID, namespace, entityType, entityName); err != nil {
+							c.log.WithError(err).WithFields(logrus.Fields{
+								"namespace":   namespace,
+								"entity_type": entityType,
+								"entity_name": entityName,
+							}).Error("Failed to collect entity metrics")
+						}
+					}
+				} else if entityType == "topic" {
+					for _, entityName := range testEntities["topic"] {
+						if err := c.collectEntityMetrics(ctx, resourceID, namespace, entityType, entityName); err != nil {
+							c.log.WithError(err).WithFields(logrus.Fields{
+								"namespace":   namespace,
+								"entity_type": entityType,
+								"entity_name": entityName,
+							}).Error("Failed to collect entity metrics")
+						}
+					}
+				} else if entityType == "subscription" {
+					for topicName, subscriptions := range testSubscriptions {
+						for _, subName := range subscriptions {
+							entityName := fmt.Sprintf("%s/subscriptions/%s", topicName, subName)
+							if err := c.collectEntityMetrics(ctx, resourceID, namespace, entityType, entityName); err != nil {
+								c.log.WithError(err).WithFields(logrus.Fields{
+									"namespace":   namespace,
+									"entity_type": entityType,
+									"entity_name": entityName,
+								}).Error("Failed to collect entity metrics")
+							}
+						}
+					}
+				}
 			}
 		}
 
@@ -187,8 +344,20 @@ func (c *Client) collectNamespaceMetrics(ctx context.Context, resourceID, namesp
 		"ConnectionsOpened",
 	}
 
-	// Include premium metrics if relevant
-	allMetrics := append(metricNames, premiumMetrics...)
+	// Define quota metrics
+	quotaMetrics := []string{
+		"NamespaceQuotaUtilization",
+		"MessagesQuotaUtilization",
+		"TopicsQuotaUtilization",
+		"QueuesQuotaUtilization",
+		"SubscriptionsQuotaUtilization",
+	}
+
+	// Include all metric types
+	allMetrics := []string{}
+	allMetrics = append(allMetrics, metricNames...)
+	allMetrics = append(allMetrics, premiumMetrics...)
+	allMetrics = append(allMetrics, quotaMetrics...)
 
 	// Set the timespan for the query (last scrape interval)
 	timespan := fmt.Sprintf("%s/%s",
@@ -204,13 +373,7 @@ func (c *Client) collectNamespaceMetrics(ctx context.Context, resourceID, namesp
 	}).Info("Fetching namespace metrics from Azure Monitor API")
 
 	// Build metricnames string with commas
-	metricNamesStr := ""
-	for i, name := range allMetrics {
-		if i > 0 {
-			metricNamesStr += ","
-		}
-		metricNamesStr += name
-	}
+	metricNamesStr := strings.Join(allMetrics, ",")
 
 	// Call Azure Monitor API
 	response, err := c.metricsClient.List(
@@ -260,15 +423,35 @@ func (c *Client) collectNamespaceMetrics(ctx context.Context, resourceID, namesp
 				timestamp = time.Now()
 			}
 
-			if dataPoint.Total != nil {
-				value = *dataPoint.Total
-			} else if dataPoint.Average != nil {
-				value = *dataPoint.Average
-			} else if dataPoint.Maximum != nil {
-				value = *dataPoint.Maximum
+			// Determine which value to use based on the metric
+			if contains(quotaMetrics, metricName) || contains(premiumMetrics, metricName) {
+				// Use average for quota and premium metrics
+				if dataPoint.Average != nil {
+					value = *dataPoint.Average
+				} else {
+					// Skip if no value available
+					continue
+				}
+			} else if contains([]string{"SuccessfulRequests", "ServerErrors", "UserErrors", "ThrottledRequests"}, metricName) {
+				// Use total for request counts
+				if dataPoint.Total != nil {
+					value = *dataPoint.Total
+				} else {
+					// Skip if no value available
+					continue
+				}
 			} else {
-				// Skip if no value available
-				continue
+				// For other metrics, try total first, then average, then maximum
+				if dataPoint.Total != nil {
+					value = *dataPoint.Total
+				} else if dataPoint.Average != nil {
+					value = *dataPoint.Average
+				} else if dataPoint.Maximum != nil {
+					value = *dataPoint.Maximum
+				} else {
+					// Skip if no value available
+					continue
+				}
 			}
 
 			// Create namespace metric
@@ -285,9 +468,8 @@ func (c *Client) collectNamespaceMetrics(ctx context.Context, resourceID, namesp
 			// Update Prometheus metrics
 			promMetricName := metrics.AzureMonitorMetricToPrometheusMetric(metricName)
 			labels := prometheus.Labels{
-				"resource_id": resourceID,
-				"namespace":   namespace,
-				"metric":      metricName,
+				"namespace": namespace,
+				"metric":    metricName,
 			}
 
 			if gauge, ok := c.metrics[promMetricName]; ok {
@@ -299,8 +481,18 @@ func (c *Client) collectNamespaceMetrics(ctx context.Context, resourceID, namesp
 	return nil
 }
 
+// contains checks if a string is in a slice of strings
+func contains(slice []string, str string) bool {
+	for _, s := range slice {
+		if s == str {
+			return true
+		}
+	}
+	return false
+}
+
 // collectEntityMetrics collects metrics for entities within a namespace
-func (c *Client) collectEntityMetrics(ctx context.Context, resourceID, namespace, entityType string) error {
+func (c *Client) collectEntityMetrics(ctx context.Context, resourceID, namespace, entityType, entityName string) error {
 	// Define standard entity metrics
 	metricNames := []string{
 		"IncomingMessages",
@@ -311,157 +503,162 @@ func (c *Client) collectEntityMetrics(ctx context.Context, resourceID, namespace
 		"Size",
 	}
 
-	// Get entity list based on entity type
-	// For Azure Monitor, we need to know the entities beforehand
-	// We could get these from the servicebus client or from configuration
+	// For subscriptions, some metrics might not be available
+	if entityType == "subscription" {
+		// Subscription metrics might be different
+		metricNames = []string{
+			"IncomingMessages",
+			"OutgoingMessages",
+			"ActiveMessages",
+			"DeadletteredMessages",
+			"ScheduledMessages",
+		}
+	}
 
-	var entityNames []string
+	c.log.WithFields(logrus.Fields{
+		"resourceID": resourceID,
+		"namespace":  namespace,
+		"entityType": entityType,
+		"entityName": entityName,
+		"metrics":    metricNames,
+	}).Info("Fetching entity metrics from Azure Monitor API")
 
-	// TODO: Get entity names from Service Bus Management API or cached results
-	// For demonstration, use test data
+	// Build the entity resource ID
+	var entityResourceID string
+
 	switch entityType {
 	case "queue":
-		entityNames = []string{"queue1", "queue2", "queue3"}
+		entityResourceID = fmt.Sprintf("%s/queues/%s", resourceID, entityName)
 	case "topic":
-		entityNames = []string{"topic1", "topic2"}
+		entityResourceID = fmt.Sprintf("%s/topics/%s", resourceID, entityName)
 	case "subscription":
-		// For subscriptions, we need to specify both topic and subscription
-		entityNames = []string{"topic1/subscription1", "topic1/subscription2", "topic2/subscription1"}
+		// For subscriptions, the format is already "topic/subscriptions/subscription"
+		entityResourceID = fmt.Sprintf("%s/topics/%s", resourceID, entityName)
 	default:
 		return fmt.Errorf("unsupported entity type: %s", entityType)
 	}
 
-	c.log.WithFields(logrus.Fields{
-		"resourceID":  resourceID,
-		"namespace":   namespace,
-		"entityType":  entityType,
-		"entityCount": len(entityNames),
-		"metrics":     metricNames,
-	}).Info("Fetching entity metrics from Azure Monitor API")
+	// Set the timespan for the query (last scrape interval)
+	timespan := fmt.Sprintf("%s/%s",
+		time.Now().Add(-c.cfg.Metrics.ScrapeInterval).Format(time.RFC3339),
+		time.Now().Format(time.RFC3339),
+	)
 
-	// Process each entity
-	for _, entityName := range entityNames {
-		// Build the entity resource ID
-		var entityResourceID string
+	// Build metricnames string with commas
+	metricNamesStr := strings.Join(metricNames, ",")
 
-		switch entityType {
-		case "queue":
-			entityResourceID = fmt.Sprintf("%s/queues/%s", resourceID, entityName)
-		case "topic":
-			entityResourceID = fmt.Sprintf("%s/topics/%s", resourceID, entityName)
-		case "subscription":
-			// For subscriptions, split topic/subscription
-			parts := strings.SplitN(entityName, "/", 2)
-			if len(parts) != 2 {
-				c.log.WithField("entity", entityName).Warn("Invalid subscription name format, expected topic/subscription")
+	// Call Azure Monitor API for each entity
+	response, err := c.metricsClient.List(
+		ctx,
+		entityResourceID,
+		&armmonitor.MetricsClientListOptions{
+			Timespan:    &timespan,
+			Interval:    to.Ptr("PT5M"), // 5-minute intervals
+			Metricnames: &metricNamesStr,
+			Aggregation: to.Ptr("Total,Average,Maximum"),
+		},
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to get entity metrics: %w", err)
+	}
+
+	// Process metrics from response
+	if response.Value != nil {
+		for _, metric := range response.Value {
+			if metric.Name == nil || metric.Name.Value == nil {
 				continue
 			}
-			topicName, subName := parts[0], parts[1]
-			entityResourceID = fmt.Sprintf("%s/topics/%s/subscriptions/%s", resourceID, topicName, subName)
-		}
 
-		// Set the timespan for the query (last scrape interval)
-		timespan := fmt.Sprintf("%s/%s",
-			time.Now().Add(-c.cfg.Metrics.ScrapeInterval).Format(time.RFC3339),
-			time.Now().Format(time.RFC3339),
-		)
+			metricName := *metric.Name.Value
 
-		// Build metricnames string with commas
-		metricNamesStr := ""
-		for i, name := range metricNames {
-			if i > 0 {
-				metricNamesStr += ","
+			if metric.Timeseries == nil || len(metric.Timeseries) == 0 {
+				continue
 			}
-			metricNamesStr += name
-		}
 
-		// Call Azure Monitor API for each entity
-		response, err := c.metricsClient.List(
-			ctx,
-			entityResourceID,
-			&armmonitor.MetricsClientListOptions{
-				Timespan:    &timespan,
-				Interval:    to.Ptr("PT5M"), // 5-minute intervals
-				Metricnames: &metricNamesStr,
-				Aggregation: to.Ptr("Total,Average,Maximum"),
-			},
-		)
+			// Get the latest data point for each metric
+			timeSeries := metric.Timeseries[0]
+			if timeSeries.Data == nil || len(timeSeries.Data) == 0 {
+				continue
+			}
 
-		if err != nil {
-			c.log.WithError(err).WithFields(logrus.Fields{
-				"entityType": entityType,
-				"entity":     entityName,
-			}).Error("Failed to get entity metrics")
-			continue
-		}
+			// Use the latest data point
+			dataPoint := timeSeries.Data[len(timeSeries.Data)-1]
 
-		// Process metrics from response
-		if response.Value != nil {
-			for _, metric := range response.Value {
-				if metric.Name == nil || metric.Name.Value == nil {
-					continue
-				}
+			// Choose the appropriate value based on the metric type
+			var value float64
+			var timestamp time.Time
 
-				metricName := *metric.Name.Value
+			if dataPoint.TimeStamp != nil {
+				timestamp = *dataPoint.TimeStamp
+			} else {
+				timestamp = time.Now()
+			}
 
-				if metric.Timeseries == nil || len(metric.Timeseries) == 0 {
-					continue
-				}
-
-				// Get the latest data point for each metric
-				timeSeries := metric.Timeseries[0]
-				if timeSeries.Data == nil || len(timeSeries.Data) == 0 {
-					continue
-				}
-
-				// Use the latest data point
-				dataPoint := timeSeries.Data[len(timeSeries.Data)-1]
-
-				// Choose the appropriate value based on the metric type
-				var value float64
-				var timestamp time.Time
-
-				if dataPoint.TimeStamp != nil {
-					timestamp = *dataPoint.TimeStamp
+			// Determine which value to use based on the metric
+			if metricName == "Size" {
+				// Use average for size
+				if dataPoint.Average != nil {
+					value = *dataPoint.Average
 				} else {
-					timestamp = time.Now()
+					// Skip if no value available
+					continue
 				}
-
+			} else if contains([]string{"IncomingMessages", "OutgoingMessages"}, metricName) {
+				// Use total for message counts
 				if dataPoint.Total != nil {
 					value = *dataPoint.Total
-				} else if dataPoint.Average != nil {
+				} else {
+					// Skip if no value available
+					continue
+				}
+			} else {
+				// For other metrics, try average first, then total
+				if dataPoint.Average != nil {
 					value = *dataPoint.Average
+				} else if dataPoint.Total != nil {
+					value = *dataPoint.Total
 				} else if dataPoint.Maximum != nil {
 					value = *dataPoint.Maximum
 				} else {
 					// Skip if no value available
 					continue
 				}
+			}
 
-				// Create entity metric
-				entityMetric := EntityMetric{
-					Namespace:  namespace,
-					EntityName: entityName,
-					EntityType: entityType,
-					MetricName: metricName,
-					Value:      value,
-					Timestamp:  timestamp,
+			// For entity display names, handle subscriptions specially
+			displayName := entityName
+			if entityType == "subscription" {
+				// Extract just the subscription name from the path
+				parts := strings.Split(entityName, "/")
+				if len(parts) == 3 && parts[1] == "subscriptions" {
+					displayName = fmt.Sprintf("%s/%s", parts[0], parts[2])
 				}
+			}
 
-				// Add to the list
-				c.entityMetrics = append(c.entityMetrics, entityMetric)
+			// Create entity metric
+			entityMetric := EntityMetric{
+				Namespace:  namespace,
+				EntityName: displayName,
+				EntityType: entityType,
+				MetricName: metricName,
+				Value:      value,
+				Timestamp:  timestamp,
+			}
 
-				// Update Prometheus metrics
-				promMetricName := metrics.AzureMonitorMetricToPrometheusMetric(metricName)
-				labels := prometheus.Labels{
-					"namespace":   namespace,
-					"entity_name": entityName,
-					"entity_type": entityType,
-				}
+			// Add to the list
+			c.entityMetrics = append(c.entityMetrics, entityMetric)
 
-				if gauge, ok := c.metrics[promMetricName]; ok {
-					gauge.With(labels).Set(value)
-				}
+			// Update Prometheus metrics
+			promMetricName := metrics.AzureMonitorMetricToPrometheusMetric(metricName)
+			labels := prometheus.Labels{
+				"namespace":   namespace,
+				"entity_name": displayName,
+				"entity_type": entityType,
+			}
+
+			if gauge, ok := c.metrics[promMetricName]; ok {
+				gauge.With(labels).Set(value)
 			}
 		}
 	}
@@ -503,13 +700,7 @@ func (c *Client) collectDetailedMetrics(ctx context.Context, resourceID, namespa
 		filter := fmt.Sprintf("OperationName eq '%s'", operation)
 
 		// Build metricnames string with commas
-		metricNamesStr := ""
-		for i, name := range metricNames {
-			if i > 0 {
-				metricNamesStr += ","
-			}
-			metricNamesStr += name
-		}
+		metricNamesStr := strings.Join(metricNames, ",")
 
 		// Call Azure Monitor API with filter
 		response, err := c.metricsClient.List(
@@ -544,100 +735,75 @@ func (c *Client) collectDetailedMetrics(ctx context.Context, resourceID, namespa
 					continue
 				}
 
-				// Get the latest data point for each metric
-				timeSeries := metric.Timeseries[0]
-				if timeSeries.Data == nil || len(timeSeries.Data) == 0 {
-					continue
-				}
+				// Process each timeseries
+				for _, timeSeries := range metric.Timeseries {
+					if timeSeries.Data == nil || len(timeSeries.Data) == 0 {
+						continue
+					}
 
-				// Use the latest data point
-				dataPoint := timeSeries.Data[len(timeSeries.Data)-1]
+					// Get the latest data point
+					dataPoint := timeSeries.Data[len(timeSeries.Data)-1]
 
-				// Choose the appropriate value based on the metric type
-				var value float64
-				var timestamp time.Time
+					// Skip if no values
+					if dataPoint.Total == nil && dataPoint.Average == nil && dataPoint.Maximum == nil {
+						continue
+					}
 
-				if dataPoint.TimeStamp != nil {
-					timestamp = *dataPoint.TimeStamp
-				} else {
-					timestamp = time.Now()
-				}
+					// Set timestamp
+					var timestamp time.Time
+					if dataPoint.TimeStamp != nil {
+						timestamp = *dataPoint.TimeStamp
+					} else {
+						timestamp = time.Now()
+					}
 
-				if dataPoint.Total != nil {
-					value = *dataPoint.Total
-				} else if dataPoint.Average != nil {
-					value = *dataPoint.Average
-				} else if dataPoint.Maximum != nil {
-					value = *dataPoint.Maximum
-				} else {
-					// Skip if no value available
-					continue
-				}
+					// Determine value to use
+					var value float64
+					if metricName == "RequestLatency" && dataPoint.Average != nil {
+						value = *dataPoint.Average
+					} else if dataPoint.Total != nil {
+						value = *dataPoint.Total
+					} else if dataPoint.Average != nil {
+						value = *dataPoint.Average
+					} else if dataPoint.Maximum != nil {
+						value = *dataPoint.Maximum
+					}
 
-				// Create entity metric with operation label
-				entityMetric := EntityMetric{
-					Namespace:  namespace,
-					EntityName: "namespace", // Apply to namespace level
-					EntityType: "namespace",
-					MetricName: metricName,
-					Operation:  operation,
-					Labels: map[string]string{
+					// Create entity metric with operation label
+					entityMetric := EntityMetric{
+						Namespace:  namespace,
+						EntityName: "namespace", // Namespace level
+						EntityType: "namespace",
+						MetricName: metricName,
+						Operation:  operation,
+						Labels: map[string]string{
+							"operation": operation,
+						},
+						Value:     value,
+						Timestamp: timestamp,
+					}
+
+					// Add to the list
+					c.entityMetrics = append(c.entityMetrics, entityMetric)
+
+					// Update Prometheus metrics
+					promMetricName := fmt.Sprintf("%s_%s",
+						metrics.AzureMonitorMetricToPrometheusMetric(metricName),
+						strings.ToLower(operation),
+					)
+
+					labels := prometheus.Labels{
+						"namespace": namespace,
 						"operation": operation,
-					},
-					Value:     value,
-					Timestamp: timestamp,
-				}
+					}
 
-				// Add to the list
-				c.entityMetrics = append(c.entityMetrics, entityMetric)
-
-				// Update Prometheus metrics
-				promMetricName := fmt.Sprintf("%s_%s",
-					metrics.AzureMonitorMetricToPrometheusMetric(metricName),
-					strings.ToLower(operation),
-				)
-
-				labels := prometheus.Labels{
-					"namespace": namespace,
-					"operation": operation,
-				}
-
-				if gauge, ok := c.metrics[promMetricName]; ok {
-					gauge.With(labels).Set(value)
+					if gauge, ok := c.metrics[promMetricName]; ok {
+						gauge.With(labels).Set(value)
+					}
 				}
 			}
 		}
 	}
 
 	return nil
-}
-
-// collectSubscriptionsFromManagementAPI gets subscription names for a topic using the Management API
-func (c *Client) getSubscriptionsFromManagementAPI(ctx context.Context, topicName string) ([]string, error) {
-	subscriptionsClient, err := c.auth.GetSubscriptionsClient(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get subscriptions client: %w", err)
-	}
-
-	resourceGroupName := c.cfg.ServiceBus.ResourceGroup
-	if resourceGroupName == "" {
-		return nil, fmt.Errorf("resource group name not specified in config")
-	}
-
-	var subscriptionNames []string
-	pager := subscriptionsClient.NewListByTopicPager(resourceGroupName, c.namespace, topicName, nil)
-	for pager.More() {
-		page, err := pager.NextPage(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get subscriptions page: %w", err)
-		}
-
-		for _, subscription := range page.Value {
-			if subscription.Name != nil {
-				subscriptionNames = append(subscriptionNames, *subscription.Name)
-			}
-		}
-	}
-
-	return subscriptionNames, nil
 }
