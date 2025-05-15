@@ -1,0 +1,16 @@
+# Azure specific values
+config:
+  auth:
+    mode: "azure_auth"
+    useManagedIdentity: true
+
+# For AKS, use managed identity
+podLabels:
+  aadpodidbinding: azure-servicebus-exporter
+
+# Create pod identity binding for AKS
+podIdentity:
+  enabled: true
+  name: azure-servicebus-exporter
+  resourceID: "/subscriptions/your-subscription/resourcegroups/your-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/azure-servicebus-exporter"
+  clientID: "your-managed-identity-client-id"

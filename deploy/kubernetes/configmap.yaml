@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: azure-servicebus-exporter
+data:
+  config.yaml: |
+    server:
+      listen: ":8080"
+      timeout: 30s
+    
+    auth:
+      # mode can be "connection_string" or "azure_auth"
+      mode: "connection_string"
+      
+      # Secret reference (used if connection_string is not specified)
+      # The actual connection string will be read from Kubernetes Secret
+    
+    metrics:
+      namespace: "azure_servicebus"
+      template: "{namespace}_{metric}_{aggregation}_{unit}"
+      cache_duration: 1m
+      scrape_interval: 1m
+    
+    servicebus:
+      entity_filter: ".*"
+      entity_types: ["queue", "topic", "subscription"]
+      include_namespace: true
+    
+    logging:
+      level: "info"
+      format: "json"

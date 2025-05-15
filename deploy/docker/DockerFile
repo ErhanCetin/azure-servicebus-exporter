@@ -1,0 +1,41 @@
+# Build stage
+FROM golang:1.19-alpine AS build
+
+WORKDIR /app
+
+# Install dependencies
+RUN apk add --no-cache git ca-certificates tzdata
+
+# Copy Go module files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the application
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo -ldflags="-s -w" -o azure-servicebus-exporter ./cmd/azure-servicebus-exporter
+
+# Final stage
+FROM gcr.io/distroless/static:nonroot
+
+# Copy binary from build stage
+COPY --from=build /app/azure-servicebus-exporter /azure-servicebus-exporter
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+# Copy default config file (optional)
+COPY config.yaml /etc/azure-servicebus-exporter/config.yaml
+
+# Use nonroot user
+USER nonroot:nonroot
+
+# Set entrypoint
+ENTRYPOINT ["/azure-servicebus-exporter", "--config", "/etc/azure-servicebus-exporter/config.yaml"]
+
+# Expose Prometheus metrics port
+EXPOSE 8080
+
+# Add metadata
+LABEL org.opencontainers.image.source="https://azure-servicebus-exporter"
+LABEL org.opencontainers.image.description="Prometheus exporter for Azure Service Bus metrics"
+LABEL org.opencontainers.image.licenses="MIT"

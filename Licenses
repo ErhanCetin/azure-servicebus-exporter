@@ -1,0 +1,15 @@
+## Özet
+
+Bu proje planı, Azure Service Bus metriklerini Prometheus'a aktarabilen, hem connection string hem de service principal kimlik doğrulama yöntemlerini destekleyen ve hem Azure hem de Google Cloud Kubernetes ortamlarında çalışabilen bir exporter uygulaması geliştirmek için kapsamlı bir yol haritası sunmaktadır.
+
+Temel bileşenler şunlardır:
+
+1. **Go uygulaması**: Metrik toplama, dönüştürme ve sunma işlevleri
+2. **Çoklu kimlik doğrulama**: Connection string, service principal, managed identity desteği
+3. **Kubernetes desteği**: Deployment, service, configmap, secret, serviceaccount manifestleri
+4. **Helm chart**: Farklı cloud platformları için özelleştirilmiş değerler
+5. **Secret yönetimi**: Kubernetes secret entegrasyonu
+6. **Belgelendirme**: Kullanım talimatları, konfigürasyon seçenekleri
+7. **CI/CD**: Otomatik test, build ve dağıtım süreci
+
+Bu planı takip ederek, profesyonel kalitede ve çok yönlü bir Azure Service Bus Prometheus Exporter uygulaması geliştirilebilir.

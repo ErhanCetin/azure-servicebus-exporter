@@ -1,0 +1,26 @@
+
+server:
+  listen: ":8080"
+  timeout: 30s
+
+auth:
+  mode: "connection_string"
+  connection_string: "Endpoint=sb://xx.servicebus.windows.net/;SharedAccessKeyName=PrometheusExporter;SharedAccessKey=xxxx"
+
+metrics:
+  namespace: "azure_servicebus"
+  template: "{namespace}_{metric}_{aggregation}_{unit}"
+  cache_duration: "1m"
+  scrape_interval: "1m"
+
+servicebus:
+  namespaces: ["xx"]
+  resource_group: "xxx"
+  use_real_entities: true
+  entityFilter: ".*"
+  entityTypes: ["queue", "topic", "subscription"]
+  includeNamespace: true
+
+logging:
+  level: "debug"
+  format: "text"

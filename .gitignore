@@ -1,0 +1,23 @@
+# Go build files
+/bin/
+/pkg/
+/vendor/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.idea/
+.vscode/
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+
+# Application specific
+config.local.yaml
+
+# Dependency directories
+node_modules/

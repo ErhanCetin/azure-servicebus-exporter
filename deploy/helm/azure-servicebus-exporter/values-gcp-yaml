@@ -1,0 +1,11 @@
+# GCP specific values
+config:
+  auth:
+    mode: "connection_string"
+
+# Use Secret Manager to store secrets
+secretProvider:
+  enabled: true
+  secretName: "azure-servicebus-exporter"
+  secretKey: "connection_string"
+  projectID: "your-gcp-project"

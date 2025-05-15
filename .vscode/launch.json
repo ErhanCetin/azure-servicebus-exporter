@@ -1,0 +1,22 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "go",
+      "request": "launch",
+      "name": "Launch Azure Service Bus Exporter",
+      "program": "${workspaceFolder}/cmd/azure-servicebus-exporter",
+      "args": [
+        "--config",
+        "${input:configFilePath}"
+      ]
+    }
+  ],
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "configFilePath",
+      "description": "Enter the path to your configuration file (e.g., config.yaml)"
+    }
+  ]
+}
