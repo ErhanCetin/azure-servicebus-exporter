@@ -232,6 +232,7 @@ func (c *Client) GetNamespaceMetrics() []NamespaceMetric {
 }
 
 // collectQueues collects queue metrics
+// collectQueues collects queue metrics
 func (c *Client) collectQueues(ctx context.Context) error {
 	c.log.Info("Collecting Service Bus queue metrics")
 
@@ -240,13 +241,41 @@ func (c *Client) collectQueues(ctx context.Context) error {
 	var err error
 
 	if c.cfg.ServiceBus.UseRealEntities {
-		// Get real queue names
-		queueNames, err = c.getQueuesFromManagementAPI(ctx)
-		if err != nil {
-			c.log.WithError(err).Warn("Failed to get queue names using Management API, using test queues")
-			queueNames = []string{"queue1", "queue2", "queue3"}
+		if c.cfg.Auth.Mode == "azure_auth" {
+			// In azure_auth mode, use Management API
+			queueNames, err = c.getQueuesFromManagementAPI(ctx)
+			if err != nil {
+				c.log.WithError(err).Warn("Failed to get queue names using Management API, will try admin client")
+
+				// Fallback to admin client if Management API fails
+				if c.adminClient != nil {
+					queueNames, err = c.getQueuesFromAdminClient(ctx)
+					if err != nil {
+						c.log.WithError(err).Warn("Failed to get queue names using admin client, using test queues")
+						queueNames = []string{"queue1", "queue2", "queue3"}
+					} else {
+						c.log.WithField("count", len(queueNames)).Info("Got queue names from admin client")
+					}
+				} else {
+					queueNames = []string{"queue1", "queue2", "queue3"}
+				}
+			} else {
+				c.log.WithField("count", len(queueNames)).Info("Got queue names from Management API")
+			}
 		} else {
-			c.log.WithField("count", len(queueNames)).Info("Got queue names from Management API")
+			// In connection_string mode, use admin client
+			if c.adminClient != nil {
+				queueNames, err = c.getQueuesFromAdminClient(ctx)
+				if err != nil {
+					c.log.WithError(err).Warn("Failed to get queue names using admin client, using test queues")
+					queueNames = []string{"queue1", "queue2", "queue3"}
+				} else {
+					c.log.WithField("count", len(queueNames)).Info("Got queue names from admin client")
+				}
+			} else {
+				c.log.Warn("Admin client not available, using test queues")
+				queueNames = []string{"queue1", "queue2", "queue3"}
+			}
 		}
 	} else {
 		// Use test data
@@ -295,6 +324,28 @@ func (c *Client) collectQueues(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// getQueuesFromAdminClient gets queue names using the Admin Client
+func (c *Client) getQueuesFromAdminClient(ctx context.Context) ([]string, error) {
+	var queueNames []string
+
+	// GetQueues metodunu kullan (ListQueues değil)
+	pager := c.adminClient.NewListQueuesPager(nil)
+	//var queueNames []string
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list queues: %w", err)
+		}
+		for _, queue := range page.Queues {
+			if queue.QueueName != "" {
+				queueNames = append(queueNames, queue.QueueName)
+			}
+		}
+	}
+
+	return queueNames, nil
 }
 
 // Update multiple Prometheus metrics at once
@@ -367,7 +418,7 @@ func (c *Client) collectQueueMetrics(ctx context.Context, queueName string) (*Qu
 				}
 			}
 
-		} else {
+		} else if c.cfg.Auth.Mode == "azure_auth" {
 			// Fallback to Management API
 			queueProps, err := c.getQueuePropertiesFromManagementAPI(ctx, queueName)
 			if err != nil {
@@ -579,13 +630,41 @@ func (c *Client) collectTopics(ctx context.Context) error {
 	var err error
 
 	if c.cfg.ServiceBus.UseRealEntities {
-		// Get real topic names
-		topicNames, err = c.getTopicsFromManagementAPI(ctx)
-		if err != nil {
-			c.log.WithError(err).Warn("Failed to get topic names using Management API, using test topics")
-			topicNames = []string{"topic1", "topic2"}
+		if c.cfg.Auth.Mode == "azure_auth" {
+			// In azure_auth mode, use Management API
+			topicNames, err = c.getTopicsFromManagementAPI(ctx)
+			if err != nil {
+				c.log.WithError(err).Warn("Failed to get topic names using Management API, will try admin client")
+
+				// Fallback to admin client if Management API fails
+				if c.adminClient != nil {
+					topicNames, err = c.getTopicsFromAdminClient(ctx)
+					if err != nil {
+						c.log.WithError(err).Warn("Failed to get topic names using admin client, using test topics")
+						topicNames = []string{"topic1", "topic2"}
+					} else {
+						c.log.WithField("count", len(topicNames)).Info("Got topic names from admin client")
+					}
+				} else {
+					topicNames = []string{"topic1", "topic2"}
+				}
+			} else {
+				c.log.WithField("count", len(topicNames)).Info("Got topic names from Management API")
+			}
 		} else {
-			c.log.WithField("count", len(topicNames)).Info("Got topic names from Management API")
+			// In connection_string mode, use admin client
+			if c.adminClient != nil {
+				topicNames, err = c.getTopicsFromAdminClient(ctx)
+				if err != nil {
+					c.log.WithError(err).Warn("Failed to get topic names using admin client, using test topics")
+					topicNames = []string{"topic1", "topic2"}
+				} else {
+					c.log.WithField("count", len(topicNames)).Info("Got topic names from admin client")
+				}
+			} else {
+				c.log.Warn("Admin client not available, using test topics")
+				topicNames = []string{"topic1", "topic2"}
+			}
 		}
 	} else {
 		// Use test data
@@ -636,6 +715,31 @@ func (c *Client) collectTopics(ctx context.Context) error {
 	return nil
 }
 
+// getTopicsFromAdminClient gets topic names using the Admin Client
+func (c *Client) getTopicsFromAdminClient(ctx context.Context) ([]string, error) {
+	var topicNames []string
+
+	// Pager oluştur
+	pager := c.adminClient.NewListTopicsPager(nil)
+
+	// Sayfaları döngüyle işleyin
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list topics: %w", err)
+		}
+
+		// Her bir topic'i işleyin
+		for _, topic := range page.Topics {
+			if topic.TopicName != "" {
+				topicNames = append(topicNames, topic.TopicName)
+			}
+		}
+	}
+
+	return topicNames, nil
+}
+
 // collectTopicMetrics collects metrics for a specific topic
 func (c *Client) collectTopicMetrics(ctx context.Context, topicName string) (*TopicMetric, error) {
 	c.log.WithField("topic", topicName).Debug("Collecting topic metrics")
@@ -660,7 +764,7 @@ func (c *Client) collectTopicMetrics(ctx context.Context, topicName string) (*To
 				sizeBytes = float64(runtimeProps.SizeInBytes)
 				subscriptionCount = float64(runtimeProps.SubscriptionCount)
 			} else {
-				c.log.WithField("topic", topicName).Warn("runtimeProps is nil, skipping metric collection for this topic")
+				c.log.WithField("topic", topicName).Warn("runtimeProps for Topic is nil, skipping metric collection for this topic")
 			}
 			// Get topic properties
 			topicProps, err := c.adminClient.GetTopic(ctx, topicName, nil)
@@ -674,7 +778,7 @@ func (c *Client) collectTopicMetrics(ctx context.Context, topicName string) (*To
 			} else {
 				c.log.WithField("topic", topicName).Warn("topicProps is nil, skipping metric collection for this topic")
 			}
-		} else {
+		} else if c.cfg.Auth.Mode == "azure_auth" {
 			// Fallback to Management API
 			topicProps, err := c.getTopicPropertiesFromManagementAPI(ctx, topicName)
 			if err != nil {
@@ -839,16 +943,50 @@ func (c *Client) collectSubscriptions(ctx context.Context, topicName string) err
 	var err error
 
 	if c.cfg.ServiceBus.UseRealEntities {
-		// Get real subscription names
-		subscriptionNames, err = c.getSubscriptionsFromManagementAPI(ctx, topicName)
-		if err != nil {
-			c.log.WithError(err).WithField("topic", topicName).Warn("Failed to get subscription names, using test subscriptions")
-			subscriptionNames = []string{"sub1", "sub2"}
+		if c.cfg.Auth.Mode == "azure_auth" {
+			// In azure_auth mode, use Management API
+			subscriptionNames, err = c.getSubscriptionsFromManagementAPI(ctx, topicName)
+			if err != nil {
+				c.log.WithError(err).WithField("topic", topicName).Warn("Failed to get subscription names using Management API, will try admin client")
+
+				// Fallback to admin client if Management API fails
+				if c.adminClient != nil {
+					subscriptionNames, err = c.getSubscriptionsFromAdminClient(ctx, topicName)
+					if err != nil {
+						c.log.WithError(err).WithField("topic", topicName).Warn("Failed to get subscription names using admin client, using test subscriptions")
+						subscriptionNames = []string{"sub1", "sub2"}
+					} else {
+						c.log.WithFields(logrus.Fields{
+							"topic": topicName,
+							"count": len(subscriptionNames),
+						}).Info("Got subscription names from admin client")
+					}
+				} else {
+					subscriptionNames = []string{"sub1", "sub2"}
+				}
+			} else {
+				c.log.WithFields(logrus.Fields{
+					"topic": topicName,
+					"count": len(subscriptionNames),
+				}).Info("Got subscription names from Management API")
+			}
 		} else {
-			c.log.WithFields(logrus.Fields{
-				"topic": topicName,
-				"count": len(subscriptionNames),
-			}).Info("Got subscription names from Management API")
+			// In connection_string mode, use admin client
+			if c.adminClient != nil {
+				subscriptionNames, err = c.getSubscriptionsFromAdminClient(ctx, topicName)
+				if err != nil {
+					c.log.WithError(err).WithField("topic", topicName).Warn("Failed to get subscription names using admin client, using test subscriptions")
+					subscriptionNames = []string{"sub1", "sub2"}
+				} else {
+					c.log.WithFields(logrus.Fields{
+						"topic": topicName,
+						"count": len(subscriptionNames),
+					}).Info("Got subscription names from admin client")
+				}
+			} else {
+				c.log.Warn("Admin client not available, using test subscriptions")
+				subscriptionNames = []string{"sub1", "sub2"}
+			}
 		}
 	} else {
 		// Use test data
@@ -902,6 +1040,31 @@ func (c *Client) collectSubscriptions(ctx context.Context, topicName string) err
 	return nil
 }
 
+// getSubscriptionsFromAdminClient gets subscription names using the Admin Client
+func (c *Client) getSubscriptionsFromAdminClient(ctx context.Context, topicName string) ([]string, error) {
+	var subscriptionNames []string
+
+	// Pager oluştur
+	pager := c.adminClient.NewListSubscriptionsPager(topicName, nil)
+
+	// Sayfaları döngüyle işleyin
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list subscriptions for topic %s: %w", topicName, err)
+		}
+
+		// Her bir aboneliği işleyin
+		for _, subscription := range page.Subscriptions {
+			if subscription.SubscriptionName != "" {
+				subscriptionNames = append(subscriptionNames, subscription.SubscriptionName)
+			}
+		}
+	}
+
+	return subscriptionNames, nil
+}
+
 // collectSubscriptionMetrics collects metrics for a specific subscription
 func (c *Client) collectSubscriptionMetrics(ctx context.Context, topicName, subName string) (*SubscriptionMetric, error) {
 	c.log.WithFields(logrus.Fields{
@@ -942,7 +1105,7 @@ func (c *Client) collectSubscriptionMetrics(ctx context.Context, topicName, subN
 			} else {
 				c.log.WithField("topic", topicName).WithField("subscription", subName).Warn("runtimeProps is nil, skipping metric collection for this subscription")
 			}
-		} else {
+		} else if c.cfg.Auth.Mode == "azure_auth" {
 			// Fallback to Management API
 			subProps, err := c.getSubscriptionPropertiesFromManagementAPI(ctx, topicName, subName)
 			if err != nil {
