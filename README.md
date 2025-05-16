@@ -139,3 +139,19 @@ curl http://localhost:8080/metrics
 
 # Service Bus metriklerini sorgulama
 curl http://localhost:8080/probe/metrics
+
+
+
+
+docker run -p 8080:8080 \
+  -v $(pwd)/my-custom-config.yaml:/config/custom.yaml \
+  yourregistry/azure-servicebus-exporter --config /config/custom.yaml
+
+
+ docker run -p 8080:8080 \
+  -e SB_EXPORTER_AUTH_CONNECTION_STRING="Endpoint=sb://namespace.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=yourkey" \
+  -e SB_EXPORTER_SERVER_LISTEN=":8080" \
+  -e SB_EXPORTER_METRICS_NAMESPACE="azure_servicebus" \
+  -e SB_EXPORTER_METRICS_CACHE_DURATION="1m" \
+  -e SB_EXPORTER_LOGGING_LEVEL="info" \
+  yourregistry/azure-servicebus-exporter 

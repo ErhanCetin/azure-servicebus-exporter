@@ -11,7 +11,7 @@ metrics:
   namespace: "azure_servicebus"
   template: "{namespace}_{metric}_{aggregation}_{unit}"
   cache_duration: "1m"
-  scrape_interval: "1m"
+  scrape_interval: "1m" # Prometheus'un scrape interval'ı ile uyumlu olması için kullanılabilir
 
 servicebus:
   namespaces: ["xx"]

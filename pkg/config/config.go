@@ -21,48 +21,26 @@ type Config struct {
 
 	// Auth configuration
 	Auth struct {
-		// Connection string veya Azure kimlik bilgileri kullanımını belirle
-		Mode string `mapstructure:"mode"` // "connection_string" veya "azure_auth"
-
-		// Service Bus Connection String
 		ConnectionString string `mapstructure:"connection_string"`
-
-		// Azure kimlik bilgileri
-		TenantID     string `mapstructure:"tenant_id"`
-		ClientID     string `mapstructure:"client_id"`
-		ClientSecret string `mapstructure:"client_secret"`
-
-		// Managed Identity kullanımı
-		UseManagedIdentity bool `mapstructure:"use_managed_identity"`
 	} `mapstructure:"auth"`
 
-	// Azure Monitor yapılandırması
-	AzureMonitor struct {
-		SubscriptionIDs []string `mapstructure:"subscription_ids"`
-	} `mapstructure:"azure_monitor"`
-
-	// Metrics yapılandırması
+	// Metrics configuration
 	Metrics struct {
-		Namespace        string            `mapstructure:"namespace"`
-		Template         string            `mapstructure:"template"`
-		CacheDuration    time.Duration     `mapstructure:"cache_duration"`
-		ScrapeInterval   time.Duration     `mapstructure:"scrape_interval"`
-		CustomLabels     map[string]string `mapstructure:"custom_labels"`     // Tüm metriklere eklenecek özel etiketler
-		EntityFormat     string            `mapstructure:"entity_format"`     // Entity adı formatı (örn: {namespace}.{name})
-		IncludeOperation bool              `mapstructure:"include_operation"` // İşlem adlarını etiket olarak ekle
+		Namespace      string            `mapstructure:"namespace"`
+		CacheDuration  time.Duration     `mapstructure:"cache_duration"`
+		ScrapeInterval time.Duration     `mapstructure:"scrape_interval"`
+		CustomLabels   map[string]string `mapstructure:"custom_labels"` // Optional custom labels
 	} `mapstructure:"metrics"`
 
-	// ServiceBus yapılandırması
+	// ServiceBus configuration
 	ServiceBus struct {
-		Namespaces       []string `mapstructure:"namespaces"` // Connection string modunda kullanılmaz
-		ResourceGroup    string   `mapstructure:"resource_group"`
-		UseRealEntities  bool     `mapstructure:"use_real_entities"`
-		EntityFilter     string   `mapstructure:"entity_filter"`     // Entity filtreleme (regex)
+		Namespaces       []string `mapstructure:"namespaces"`        // Optional for display purposes
+		EntityFilter     string   `mapstructure:"entity_filter"`     // Entity filtering (regex)
 		EntityTypes      []string `mapstructure:"entity_types"`      // "queue", "topic", "subscription"
-		IncludeNamespace bool     `mapstructure:"include_namespace"` // Namespace metriklerini dahil et
+		IncludeNamespace bool     `mapstructure:"include_namespace"` // Include namespace metrics
 	} `mapstructure:"servicebus"`
 
-	// Log yapılandırması
+	// Log configuration
 	Logging struct {
 		Level  string `mapstructure:"level"`
 		Format string `mapstructure:"format"`
@@ -125,18 +103,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.listen", ":8080")
 	v.SetDefault("server.timeout", "30s")
 
-	// Auth defaults
-	v.SetDefault("auth.mode", "connection_string")
-
 	// Metrics defaults
 	v.SetDefault("metrics.namespace", "azure_servicebus")
-	v.SetDefault("metrics.template", "{namespace}_{metric}_{aggregation}_{unit}")
 	v.SetDefault("metrics.cacheDuration", "1m")
 	v.SetDefault("metrics.scrapeInterval", "1m")
 
 	// ServiceBus defaults
-	v.SetDefault("servicebus.resource_group", "")
-	v.SetDefault("servicebus.use_real_entities", false)
 	v.SetDefault("servicebus.entity_filter", ".*")
 	v.SetDefault("servicebus.entity_types", []string{"queue", "topic", "subscription"})
 	v.SetDefault("servicebus.include_namespace", true)
@@ -149,22 +121,8 @@ func setDefaults(v *viper.Viper) {
 // validateConfig validates the configuration
 func validateConfig(config *Config) error {
 	// Validate auth configuration
-	if config.Auth.Mode == "connection_string" {
-		if config.Auth.ConnectionString == "" {
-			return errors.New("connection_string must be provided when auth.mode is 'connection_string'")
-		}
-	} else if config.Auth.Mode == "azure_auth" {
-		if !config.Auth.UseManagedIdentity {
-			if config.Auth.TenantID == "" || config.Auth.ClientID == "" || config.Auth.ClientSecret == "" {
-				return errors.New("tenant_id, client_id, and client_secret must be provided when auth.mode is 'azure_auth' and managed identity is not used")
-			}
-		}
-
-		if len(config.AzureMonitor.SubscriptionIDs) == 0 {
-			return errors.New("at least one subscription_id must be provided when auth.mode is 'azure_auth'")
-		}
-	} else {
-		return fmt.Errorf("invalid auth.mode: %s, must be 'connection_string' or 'azure_auth'", config.Auth.Mode)
+	if config.Auth.ConnectionString == "" {
+		return errors.New("connection_string must be provided in configuration")
 	}
 
 	// Validate server configuration

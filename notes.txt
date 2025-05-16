@@ -1,4 +1,31 @@
- 
- TODO
- pkg/auth/auth.go neden eski version kullanildi
- "github.com/Azure/azure-sdk-for-go/services/preview/monitor/mgmt/2018-03-01/insights"
+TODO :
+
+- GRAFANA
+- helmchart
+- docker image a injection li calistirabilme
+- docker container localde test
+
+asagidaki endpointleri test et .. /query haric. ihtiyac yok .
+
+[GIN-debug] GET    /metrics                  --> azure-servicebus-exporter/pkg/server.(*Server).Setup.WrapH.func2 (3 handlers)
+[GIN-debug] GET    /probe/metrics            --> azure-servicebus-exporter/pkg/server.(*Server).handleProbeMetrics-fm (3 handlers)
+[GIN-debug] GET    /probe/metrics/list       --> azure-servicebus-exporter/pkg/server.(*Server).handleProbeMetricsList-fm (3 handlers)
+[GIN-debug] GET    /probe/metrics/resource   --> azure-servicebus-exporter/pkg/server.(*Server).handleProbeMetricsResource-fm (3 handlers)
+[GIN-debug] GET    /status                   --> azure-servicebus-exporter/pkg/server.(*Server).handleStatus-fm (3 handlers)
+[GIN-debug] GET    /health                   --> azure-servicebus-exporter/pkg/server.(*Server).handleHealth-fm (3 handlers)
+[GIN-debug] GET    /query                    --> azure-servicebus-exporter/pkg/server.(*Server).handleQueryUI-fm (3 handlers)
+
+
+
+Evet, şimdi RUNTIME PROPS ile gelen tüm metrikleri gözden geçirelim ve bunları implementasyonumuza dahil edip etmediğimizi kontrol edelim. QueueRuntimeProperties içindeki alanlar:
+
+SizeInBytes - Kuyruk boyutu (bytes) - Implementasyon var, sizeBytes metriği
+CreatedAt - Kuyruğun oluşturulma zamanı - Implementasyon yok
+UpdatedAt - Kuyruğun son güncellenme zamanı - Implementasyon yok
+AccessedAt - Kuyruğun son erişim zamanı - Implementasyon yok
+TotalMessageCount - Toplam mesaj sayısı - Implementasyon yok
+ActiveMessageCount - Aktif mesaj sayısı - Implementasyon var, activeMessages metriği
+DeadLetterMessageCount - Dead letter mesaj sayısı - Implementasyon var, deadLetterMessages metriği
+ScheduledMessageCount - Zamanlanmış mesaj sayısı - Kısmen implementasyon var, scheduledMessages metriği (ama değeri doğru alınmıyor)
+TransferDeadLetterMessageCount - Transfer dead letter mesaj sayısı - Implementasyon var, transferDLQMessages metriği
+TransferMessageCount - Transfer mesaj sayısı - Implementasyon var, transferMessages metriği

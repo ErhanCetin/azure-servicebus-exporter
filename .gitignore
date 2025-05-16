@@ -24,3 +24,4 @@ node_modules/
 azure-servicebus-exporter
 
 test/
+notest.txt

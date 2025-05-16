@@ -13,7 +13,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"azure-servicebus-exporter/pkg/auth"
-	"azure-servicebus-exporter/pkg/azuremonitor"
 	"azure-servicebus-exporter/pkg/collector"
 	"azure-servicebus-exporter/pkg/config"
 	"azure-servicebus-exporter/pkg/server"
@@ -66,52 +65,26 @@ func run(cmd *cobra.Command, args []string) {
 		log.WithError(err).Fatal("Failed to load configuration")
 	}
 
-	// Environment değişkenlerinden gelen olası secret değerlerini kontrol et
+	// Environment variables for connection string
 	if envConnStr := os.Getenv("SB_CONNECTION_STRING"); envConnStr != "" && cfg.Auth.ConnectionString == "" {
 		cfg.Auth.ConnectionString = envConnStr
 		log.Info("Using connection string from environment variable")
 	}
 
-	if envTenantID := os.Getenv("AZURE_TENANT_ID"); envTenantID != "" && cfg.Auth.TenantID == "" {
-		cfg.Auth.TenantID = envTenantID
-	}
-
-	if envClientID := os.Getenv("AZURE_CLIENT_ID"); envClientID != "" && cfg.Auth.ClientID == "" {
-		cfg.Auth.ClientID = envClientID
-	}
-
-	if envClientSecret := os.Getenv("AZURE_CLIENT_SECRET"); envClientSecret != "" && cfg.Auth.ClientSecret == "" {
-		cfg.Auth.ClientSecret = envClientSecret
-	}
-
 	// Create auth provider
-	authProvider, err := auth.NewAuthProvider(cfg)
+	authProvider, err := auth.NewAuthProvider(cfg, log)
 	if err != nil {
 		log.WithError(err).Fatal("Failed to create auth provider")
 	}
 
-	// Create clients based on auth mode
-	var sbClient *servicebus.Client
-	var amClient *azuremonitor.Client
-
-	// Service Bus client (connection string auth)
-	if cfg.Auth.Mode == "connection_string" {
-		sbClient, err = servicebus.NewClient(cfg, authProvider, log)
-		if err != nil {
-			log.WithError(err).Fatal("Failed to create Service Bus client")
-		}
+	// Create Service Bus client
+	sbClient, err := servicebus.NewClient(cfg, authProvider, log)
+	if err != nil {
+		log.WithError(err).Fatal("Failed to create Service Bus client")
 	}
 
-	// Azure Monitor client (service principal or managed identity auth)
-	if cfg.Auth.Mode == "azure_auth" {
-		amClient, err = azuremonitor.NewClient(cfg, authProvider, log)
-		if err != nil {
-			log.WithError(err).Fatal("Failed to create Azure Monitor client")
-		}
-	}
-
-	// Create collector
-	col := collector.NewServiceBusCollector(cfg, log, sbClient, amClient)
+	// Create collector (without azuremonitor client)
+	col := collector.NewServiceBusCollector(cfg, log, sbClient)
 
 	// Create HTTP server
 	srv := server.NewServer(cfg, log, col)
